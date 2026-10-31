@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Multiplayer Test Room</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 14px system-ui, sans-serif; overflow: hidden; }
+    canvas { display: block; }
+    #hud { position: fixed; top: 8px; left: 8px; background: rgba(0,0,0,.6); padding: 6px 10px; border-radius: 6px; }
+    #chat { position: fixed; left: 8px; bottom: 8px; width: min(360px, calc(100% - 16px)); }
+    #log { background: rgba(0,0,0,.6); border-radius: 6px; padding: 6px 8px; max-height: 160px; overflow-y: auto; margin-bottom: 6px; }
+    #log div { margin: 2px 0; word-wrap: break-word; }
+    #chatInput, #nameInput { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px; border: 0; }
+    #join { position: fixed; inset: 0; display: grid; place-items: center; background: #111; }
+    #join form { display: grid; gap: 8px; width: 240px; }
+    #join button { padding: 8px; border: 0; border-radius: 6px; background: #4363d8; color: #fff; cursor: pointer; }
+    canvas, #stick { touch-action: none; -webkit-user-select: none; user-select: none; }
+    #stick {
+      position: fixed; display: none; width: 140px; height: 140px; border-radius: 50%;
+      right: calc(20px + env(safe-area-inset-right, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+      background: rgba(255,255,255,.08); border: 2px solid rgba(255,255,255,.2);
+    }
+    #knob {
+      position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px 0 0 -30px;
+      border-radius: 50%; background: rgba(255,255,255,.4); pointer-events: none;
+    }
+    @media (pointer: coarse) {
+      #stick { display: block; }
+      #chat { width: min(360px, calc(100% - 190px)); bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
+      #chatInput { font-size: 16px; } /* stops phones zooming in when typing */
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hud">Connecting…</div>
+  <div id="chat">
+    <div id="log"></div>
+    <input id="chatInput" maxlength="120" placeholder="Type to chat" enterkeyhint="send" />
+  </div>
+  <div id="stick" aria-label="Movement joystick"><div id="knob"></div></div>
+  <div id="join">
+    <form id="joinForm">
+      <input id="nameInput" maxlength="16" placeholder="Your name" required />
+      <button type="submit">Join</button>
+    </form>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/client.js"></script>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const hud = document.getElementById('hud');
+    const log = document.getElementById('log');
+    const chatInput = document.getElementById('chatInput');
+    const SPEED = 300;
+    const keys = new Set();
+    const me = { x: 0, y: 0, dir: 0, anim: 0, color: '#fff', name: '' };
+    let lastEntries = 0;
+
+    function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+    addEventListener('resize', resize); resize();
+
+    addEventListener('keydown', (e) => {
+      if (document.activeElement === chatInput) return;
+      keys.add(e.key.toLowerCase());
+      if (e.key === 'Enter') { chatInput.focus(); e.preventDefault(); }
+    });
+    addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+
+    function addLog(text) {
+      const div = document.createElement('div');
+      div.textContent = text; // textContent: never render chat as HTML
+      log.appendChild(div);
+      while (log.children.length > 50) log.firstChild.remove();
+      log.scrollTop = log.scrollHeight;
+    }
+
+    const net = new GameNetwork();
+    net.on('ready', ({ self }) => { Object.assign(me, self); addLog(`Joined as ${self.name}`); });
+    net.on('player_joined', (p) => addLog(`${p.name} joined`));
+    net.on('player_left', (p) => addLog(`${p.name} left`));
+    net.on('chat', (m) => addLog(`${m.name}: ${m.text}`));
+    net.on('correction', ({ x, y }) => { me.x = x; me.y = y; });
+    net.on('batch', ({ entries }) => { lastEntries = entries; });
+    net.on('disconnected', (reason) => addLog(`Disconnected (${reason})`));
+
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { net.sendChat(chatInput.value); chatInput.value = ''; chatInput.blur(); }
+      if (e.key === 'Escape') chatInput.blur();
+    });
+
+    document.getElementById('joinForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await net.connect(document.getElementById('nameInput').value);
+        document.getElementById('join').remove();
+        requestAnimationFrame(loop);
+      } catch (err) {
+        alert(`Could not join: ${err.message}`);
+      }
+    });
+
+    // ---- Touch joystick ----
+    const stick = document.getElementById('stick');
+    const knob = document.getElementById('knob');
+    const joy = { x: 0, y: 0 };
+    let joyPointer = null;
+
+    function moveJoy(e) {
+      const rect = stick.getBoundingClientRect();
+      const max = rect.width / 2 - 30;
+      let dx = e.clientX - (rect.left + rect.width / 2);
+      let dy = e.clientY - (rect.top + rect.height / 2);
+      const len = Math.hypot(dx, dy);
+      if (len > max) { dx = dx / len * max; dy = dy / len * max; }
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      const strength = Math.min(len, max) / max;
+      if (strength < 0.15) { joy.x = 0; joy.y = 0; } // small dead zone
+      else { joy.x = dx / max; joy.y = dy / max; }
+    }
+    function releaseJoy() {
+      joyPointer = null; joy.x = 0; joy.y = 0;
+      knob.style.transform = 'translate(0, 0)';
+    }
+    stick.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      chatInput.blur();
+      joyPointer = e.pointerId;
+      stick.setPointerCapture(joyPointer);
+      moveJoy(e);
+    });
+    stick.addEventListener('pointermove', (e) => { if (e.pointerId === joyPointer) moveJoy(e); });
+    stick.addEventListener('pointerup', releaseJoy);
+    stick.addEventListener('pointercancel', releaseJoy);
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+
+      let dx = 0, dy = 0;
+      if (keys.has('w') || keys.has('arrowup')) dy -= 1;
+      if (keys.has('s') || keys.has('arrowdown')) dy += 1;
+      if (keys.has('a') || keys.has('arrowleft')) dx -= 1;
+      if (keys.has('d') || keys.has('arrowright')) dx += 1;
+      if (!dx && !dy) { dx = joy.x; dy = joy.y; } // joystick when no keys are held
+      if (dx || dy) {
+        const len = Math.hypot(dx, dy);
+        const speed = SPEED * Math.min(len, 1); // push the stick further to go faster
+        me.x = Math.max(0, Math.min(net.world.width, me.x + (dx / len) * speed * dt));
+        me.y = Math.max(0, Math.min(net.world.height, me.y + (dy / len) * speed * dt));
+        me.dir = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+        me.anim = 1;
+      } else {
+        me.anim = 0;
+      }
+      net.sendUpdate(me.x, me.y, me.dir, me.anim);
+
+      const camX = me.x - canvas.width / 2;
+      const camY = me.y - canvas.height / 2;
+      ctx.fillStyle = '#1b1b1b';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = '#2a2a2a';
+      for (let gx = -(camX % 100); gx < canvas.width; gx += 100) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, canvas.height); ctx.stroke(); }
+      for (let gy = -(camY % 100); gy < canvas.height; gy += 100) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(canvas.width, gy); ctx.stroke(); }
+
+      const remote = net.getRemotePlayers();
+      ctx.textAlign = 'center';
+      for (const p of remote) drawPlayer(p, camX, camY);
+      drawPlayer(me, camX, camY);
+
+      hud.textContent = `Players: ${remote.length + 1} | Last batch: ${lastEntries} entries | You: ${Math.round(me.x)}, ${Math.round(me.y)}`;
+      requestAnimationFrame(loop);
+    }
+
+    function drawPlayer(p, camX, camY) {
+      const sx = p.x - camX, sy = p.y - camY;
+      if (sx < -50 || sy < -50 || sx > canvas.width + 50 || sy > canvas.height + 50) return;
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(sx, sy, 12, 0, Math.PI * 2); ctx.fill();
+      const rad = p.dir * Math.PI / 180;
+      ctx.strokeStyle = '#000';
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + Math.cos(rad) * 12, sy + Math.sin(rad) * 12); ctx.stroke();
+      ctx.fillStyle = '#eee';
+      ctx.fillText(p.name, sx, sy - 18);
+    }
+  </script>
+</body>
+</html>
