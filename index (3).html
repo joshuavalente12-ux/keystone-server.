@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Keystone Realm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap">
+  <style>
+    :root {
+      --ink: #f2ecff; --muted: #b9b0d6; --glass: rgba(14, 10, 32, .62); --line: rgba(190, 170, 255, .22);
+      --accent: #8f7bff; --accent-2: #5ce1e6;
+      --display: "Cinzel", Georgia, serif; --ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    html, body { margin: 0; height: 100%; background: #0c0a1f; color: var(--ink); font: 14px/1.4 var(--ui); overflow: hidden; }
+    canvas#scene { display: block; width: 100%; height: 100%; touch-action: none; }
+    * { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    input { -webkit-user-select: text; user-select: text; }
+
+    #hud {
+      position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); left: calc(10px + env(safe-area-inset-left, 0px));
+      background: var(--glass); border: 1px solid var(--line); padding: 6px 12px; border-radius: 999px;
+      font-size: 13px; backdrop-filter: blur(6px); display: flex; gap: 10px; align-items: center;
+    }
+    #hud b { font-family: var(--display); letter-spacing: .04em; }
+    #hud .dot { width: 8px; height: 8px; border-radius: 50%; background: #ff6b6b; }
+    #hud .dot.on { background: #3ddc84; }
+
+    #chat {
+      position: fixed; left: calc(10px + env(safe-area-inset-left, 0px)); bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+      width: min(360px, calc(100% - 20px));
+    }
+    #log { background: var(--glass); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; max-height: 120px; overflow-y: auto; margin-bottom: 6px; font-size: 13px; backdrop-filter: blur(6px); }
+    #log:empty { display: none; }
+    #log div { margin: 2px 0; word-wrap: break-word; }
+    #log .sys { color: var(--muted); font-style: italic; }
+    #chatInput { width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--glass); color: var(--ink); font-size: 16px; outline: none; }
+    #chatInput:focus { border-color: var(--accent); }
+
+    #stick {
+      position: fixed; display: none; width: 140px; height: 140px; border-radius: 50%; touch-action: none;
+      right: calc(20px + env(safe-area-inset-right, 0px)); bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+      background: rgba(143, 123, 255, .12); border: 2px solid rgba(190, 170, 255, .3);
+    }
+    #knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; background: rgba(190, 170, 255, .45); pointer-events: none; }
+    #help { position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); right: calc(10px + env(safe-area-inset-right, 0px)); font-size: 12px; color: var(--muted); background: var(--glass); border: 1px solid var(--line); padding: 6px 10px; border-radius: 999px; }
+    @media (pointer: coarse) {
+      #stick { display: block; }
+      #chat { width: min(360px, calc(100% - 190px)); }
+    }
+
+    #join {
+      position: fixed; inset: 0; display: grid; place-items: center; padding: 20px;
+      background: radial-gradient(ellipse at 50% 30%, #2a1f5c 0%, #0c0a1f 70%);
+    }
+    #join form { display: grid; gap: 12px; width: min(300px, 100%); text-align: center; }
+    #join h1 { font: 700 34px/1.1 var(--display); margin: 0; letter-spacing: .05em; color: var(--ink); text-shadow: 0 0 24px rgba(143, 123, 255, .6); }
+    #join p { margin: 0 0 6px; color: var(--muted); }
+    #nameInput { padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.06); color: var(--ink); font-size: 16px; text-align: center; outline: none; }
+    #nameInput:focus { border-color: var(--accent); }
+    #join button { padding: 12px; border: 0; border-radius: 10px; background: linear-gradient(135deg, var(--accent), #6a52e8); color: #fff; font: 600 16px var(--ui); cursor: pointer; }
+    #join button:disabled { opacity: .6; }
+    #joinError { color: #ff8a8a; min-height: 1.2em; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="hud"><span class="dot" id="netDot"></span><b>Keystone Realm</b><span id="count">—</span></div>
+  <div id="help">Drag to look around</div>
+  <div id="chat">
+    <div id="log"></div>
+    <input id="chatInput" maxlength="120" placeholder="Say something…" enterkeyhint="send" autocomplete="off" />
+  </div>
+  <div id="stick" aria-label="Movement joystick"><div id="knob"></div></div>
+
+  <div id="join">
+    <form id="joinForm">
+      <h1>Keystone Realm</h1>
+      <p>Enter the realm. Everyone here is live.</p>
+      <input id="nameInput" maxlength="16" placeholder="Your wizard name" required autocomplete="off" />
+      <button type="submit" id="joinBtn">Enter</button>
+      <div id="joinError"></div>
+    </form>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/client.js"></script>
+  <script>
+  'use strict';
+  // Server coordinates are 0..4000 on a flat map. 3D world = server units / 10 (so 400 x 400 metres).
+  const SCALE = 0.1;
+  const RUN_SPEED = 90;          // server units per second (server allows 600)
+  const $ = (id) => document.getElementById(id);
+
+  // ------------------------------------------------------------------ renderer + scene
+  const canvas = $('scene');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+
+  const scene = new THREE.Scene();
+  const SKY = new THREE.Color('#2b2160');
+  scene.background = SKY;
+  scene.fog = new THREE.Fog(SKY, 40, 150);
+
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 400);
+  function resize() {
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  scene.add(new THREE.HemisphereLight('#b9a8ff', '#1d3b2a', 0.9));
+  const moon = new THREE.DirectionalLight('#dcd4ff', 0.8);
+  moon.position.set(-60, 100, -40);
+  scene.add(moon);
+
+  // ------------------------------------------------------------------ the world (seeded, so every player sees the same layout)
+  let seed = 7;
+  const rand = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+  const WORLD = 400;     // metres
+  const CENTER = WORLD / 2;
+
+  // Ground with soft color variation
+  const groundGeo = new THREE.PlaneGeometry(WORLD + 200, WORLD + 200, 60, 60);
+  groundGeo.rotateX(-Math.PI / 2);
+  const gColors = [];
+  const gBase = new THREE.Color('#2f5a3a'), gAlt = new THREE.Color('#3d6b45'), gPath = new THREE.Color('#6b5a7a');
+  const pos = groundGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const d = Math.hypot(x, z);
+    const c = gBase.clone().lerp(gAlt, (Math.sin(x * 0.08) + Math.cos(z * 0.07)) * 0.25 + 0.5);
+    if (d > 14 && d < 19) c.lerp(gPath, 0.7);        // ring path around the plaza
+    if (d <= 14) c.copy(new THREE.Color('#4a4366'));  // stone plaza
+    gColors.push(c.r, c.g, c.b);
+  }
+  groundGeo.setAttribute('color', new THREE.Float32BufferAttribute(gColors, 3));
+  const ground = new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  ground.position.set(CENTER, 0, CENTER);
+  scene.add(ground);
+
+  // The Keystone: floating crystal on a pedestal, ringed by pillars
+  const keystone = new THREE.Group();
+  keystone.position.set(CENTER, 0, CENTER);
+  scene.add(keystone);
+  const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.8, 1.2, 8), new THREE.MeshLambertMaterial({ color: '#5d5580' }));
+  pedestal.position.y = 0.6;
+  keystone.add(pedestal);
+  const crystal = new THREE.Mesh(
+    new THREE.OctahedronGeometry(1.6, 0),
+    new THREE.MeshLambertMaterial({ color: '#7fe8ff', emissive: '#3aa7c9', emissiveIntensity: 0.9 })
+  );
+  crystal.position.y = 4;
+  crystal.scale.y = 1.6;
+  keystone.add(crystal);
+  const crystalLight = new THREE.PointLight('#7fe8ff', 1.4, 40, 2);
+  crystalLight.position.y = 4;
+  keystone.add(crystalLight);
+  const pillarMat = new THREE.MeshLambertMaterial({ color: '#6e6694' });
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const pillar = new THREE.Mesh(new THREE.BoxGeometry(1, 6, 1), pillarMat);
+    pillar.position.set(Math.cos(a) * 12, 3, Math.sin(a) * 12);
+    keystone.add(pillar);
+    const orb = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 8), new THREE.MeshBasicMaterial({ color: '#b9a8ff' }));
+    orb.position.set(Math.cos(a) * 12, 6.6, Math.sin(a) * 12);
+    keystone.add(orb);
+  }
+
+  // Trees and rocks as instanced meshes (cheap on phones)
+  const dummy = new THREE.Object3D();
+  function scatter(count, minDist, place) {
+    let placed = 0, guard = 0;
+    while (placed < count && guard++ < count * 20) {
+      const x = rand() * WORLD, z = rand() * WORLD;
+      if (Math.hypot(x - CENTER, z - CENTER) < minDist) continue;
+      place(placed++, x, z);
+    }
+    return placed;
+  }
+  const TREES = 420;
+  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.4, 2.4, 6), new THREE.MeshLambertMaterial({ color: '#4a3326' }), TREES);
+  const leaves = new THREE.InstancedMesh(new THREE.ConeGeometry(1.8, 5, 7), new THREE.MeshLambertMaterial({ color: '#1f4a3a' }), TREES);
+  scatter(TREES, 30, (i, x, z) => {
+    const s = 0.8 + rand() * 0.9;
+    dummy.position.set(x, 1.2 * s, z); dummy.rotation.set(0, rand() * 6, 0); dummy.scale.setScalar(s); dummy.updateMatrix();
+    trunks.setMatrixAt(i, dummy.matrix);
+    dummy.position.y = (2.4 + 2.2) * s; dummy.updateMatrix();
+    leaves.setMatrixAt(i, dummy.matrix);
+  });
+  scene.add(trunks, leaves);
+
+  const ROCKS = 160;
+  const rocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), new THREE.MeshLambertMaterial({ color: '#6b6585' }), ROCKS);
+  scatter(ROCKS, 22, (i, x, z) => {
+    const s = 0.4 + rand() * 1.3;
+    dummy.position.set(x, s * 0.4, z); dummy.rotation.set(rand() * 3, rand() * 3, rand() * 3); dummy.scale.set(s, s * 0.7, s); dummy.updateMatrix();
+    rocks.setMatrixAt(i, dummy.matrix);
+  });
+  scene.add(rocks);
+
+  // Glowing mushrooms for a bit of magic
+  const SHROOMS = 90;
+  const shrooms = new THREE.InstancedMesh(new THREE.SphereGeometry(0.35, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#5ce1e6' }), SHROOMS);
+  scatter(SHROOMS, 20, (i, x, z) => {
+    dummy.position.set(x, 0.05, z); dummy.rotation.set(0, 0, 0); dummy.scale.setScalar(0.6 + rand()); dummy.updateMatrix();
+    shrooms.setMatrixAt(i, dummy.matrix);
+  });
+  scene.add(shrooms);
+
+  // Stars
+  const starGeo = new THREE.BufferGeometry();
+  const starPos = [];
+  for (let i = 0; i < 600; i++) {
+    const a = rand() * Math.PI * 2, e = 0.15 + rand() * 1.3, r = 300;
+    starPos.push(Math.cos(a) * Math.cos(e) * r, Math.sin(e) * r, Math.sin(a) * Math.cos(e) * r);
+  }
+  starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+  const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: '#ffffff', size: 1.2, fog: false }));
+  scene.add(stars);
+
+  // ------------------------------------------------------------------ wizards
+  function makeLabel(text, opts = {}) {
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    const font = `${opts.bold ? 600 : 500} 40px system-ui, sans-serif`;
+    ctx.font = font;
+    const w = Math.min(Math.ceil(ctx.measureText(text).width) + 40, 1024);
+    c.width = w; c.height = 64;
+    ctx.font = font;
+    if (opts.bubble) {
+      ctx.fillStyle = 'rgba(255,255,255,.92)';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(2, 2, w - 4, 60, 22); else ctx.rect(2, 2, w - 4, 60);
+      ctx.fill();
+      ctx.fillStyle = '#1b1530';
+    } else {
+      ctx.lineWidth = 8; ctx.strokeStyle = 'rgba(10,6,24,.8)';
+      ctx.strokeText(text, 20, 46);
+      ctx.fillStyle = opts.color || '#fff';
+    }
+    ctx.fillText(text, 20, 46);
+    const tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true }));
+    const h = opts.bubble ? 0.75 : 0.6;
+    sprite.scale.set(h * (w / 64), h, 1);
+    return sprite;
+  }
+
+  function makeWizard(color, name, isSelf) {
+    const g = new THREE.Group();
+    const body = new THREE.Group();
+    g.add(body);
+    const robeMat = new THREE.MeshLambertMaterial({ color });
+    const robe = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.7, 10, 1, true), robeMat);
+    robe.position.y = 0.85;
+    const robeBottom = new THREE.Mesh(new THREE.CircleGeometry(0.7, 10), robeMat);
+    robeBottom.rotation.x = Math.PI / 2; robeBottom.position.y = 0.02;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 10), new THREE.MeshLambertMaterial({ color: '#f1d3b3' }));
+    head.position.y = 1.95;
+    const beard = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.5, 8), new THREE.MeshLambertMaterial({ color: '#e8e4f0' }));
+    beard.position.set(0, 1.62, 0.2); beard.rotation.x = Math.PI;
+    const hatColor = new THREE.Color(color).multiplyScalar(0.6);
+    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.06, 14), new THREE.MeshLambertMaterial({ color: hatColor }));
+    brim.position.y = 2.2;
+    const hat = new THREE.Mesh(new THREE.ConeGeometry(0.38, 1.1, 12), new THREE.MeshLambertMaterial({ color: hatColor }));
+    hat.position.set(0, 2.75, -0.05); hat.rotation.x = -0.2;
+    const staff = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6), new THREE.MeshLambertMaterial({ color: '#6b4a2e' }));
+    staff.position.set(0.6, 1.1, 0.15);
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), new THREE.MeshBasicMaterial({ color: '#7fe8ff' }));
+    gem.position.set(0.6, 2.28, 0.15);
+    body.add(robe, robeBottom, head, beard, brim, hat, staff, gem);
+
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.8, 16), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.25, depthWrite: false }));
+    shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.03;
+    g.add(shadow);
+
+    const label = makeLabel(name, { bold: isSelf, color: isSelf ? '#ffe9a8' : '#ffffff' });
+    label.position.y = 3.6;
+    g.add(label);
+    g.userData = { body, label, bubble: null, bubbleUntil: 0, phase: Math.random() * 6 };
+    return g;
+  }
+
+  function showBubble(wizard, text) {
+    const ud = wizard.userData;
+    if (ud.bubble) { wizard.remove(ud.bubble); ud.bubble.material.map.dispose(); ud.bubble.material.dispose(); }
+    const shown = text.length > 40 ? text.slice(0, 39) + '…' : text;
+    ud.bubble = makeLabel(shown, { bubble: true });
+    ud.bubble.position.y = 4.5;
+    wizard.add(ud.bubble);
+    ud.bubbleUntil = performance.now() + 6000;
+  }
+
+  function disposeWizard(w) {
+    w.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
+    });
+  }
+
+  function animateWizard(w, moving, t, dt) {
+    const ud = w.userData;
+    const target = moving ? 1 : 0;
+    ud.walk = (ud.walk || 0) + (target - (ud.walk || 0)) * Math.min(dt * 8, 1);
+    ud.body.position.y = Math.abs(Math.sin(t * 9 + ud.phase)) * 0.18 * ud.walk + Math.sin(t * 1.5 + ud.phase) * 0.03;
+    ud.body.rotation.z = Math.sin(t * 9 + ud.phase) * 0.06 * ud.walk;
+    if (ud.bubble && performance.now() > ud.bubbleUntil) {
+      w.remove(ud.bubble); ud.bubble.material.map.dispose(); ud.bubble.material.dispose(); ud.bubble = null;
+    }
+  }
+
+  // Heading in server space (degrees, atan2(dy, dx)) -> model rotation (model faces +Z)
+  const headingToRotY = (deg) => Math.PI / 2 - deg * Math.PI / 180;
+  function lerpAngle(a, b, t) { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return a + d * t; }
+
+  // ------------------------------------------------------------------ input
+  const keys = new Set();
+  const chatInput = $('chatInput');
+  addEventListener('keydown', (e) => {
+    if (document.activeElement === chatInput || document.activeElement === $('nameInput')) return;
+    keys.add(e.key.toLowerCase());
+    if (e.key === 'Enter') { chatInput.focus(); e.preventDefault(); }
+  });
+  addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+  addEventListener('blur', () => keys.clear());
+
+  // Joystick
+  const stick = $('stick'), knob = $('knob');
+  const joy = { x: 0, y: 0 };
+  let joyPointer = null;
+  function moveJoy(e) {
+    const r = stick.getBoundingClientRect(), max = r.width / 2 - 29;
+    let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    const len = Math.hypot(dx, dy);
+    if (len > max) { dx = dx / len * max; dy = dy / len * max; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    if (Math.min(len, max) / max < 0.15) { joy.x = 0; joy.y = 0; } else { joy.x = dx / max; joy.y = dy / max; }
+  }
+  function releaseJoy() { joyPointer = null; joy.x = 0; joy.y = 0; knob.style.transform = 'translate(0,0)'; }
+  stick.addEventListener('pointerdown', (e) => { e.preventDefault(); chatInput.blur(); joyPointer = e.pointerId; stick.setPointerCapture(joyPointer); moveJoy(e); });
+  stick.addEventListener('pointermove', (e) => { if (e.pointerId === joyPointer) moveJoy(e); });
+  stick.addEventListener('pointerup', releaseJoy);
+  stick.addEventListener('pointercancel', releaseJoy);
+
+  // Drag anywhere else to orbit the camera
+  let camYaw = 0, camPitch = 0.35, dragPointer = null, lastDrag = null;
+  canvas.addEventListener('pointerdown', (e) => { chatInput.blur(); dragPointer = e.pointerId; lastDrag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(dragPointer); $('help').hidden = true; });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== dragPointer) return;
+    camYaw -= (e.clientX - lastDrag.x) * 0.006;
+    camPitch = Math.max(0.08, Math.min(1.2, camPitch + (e.clientY - lastDrag.y) * 0.004));
+    lastDrag = { x: e.clientX, y: e.clientY };
+  });
+  const endDrag = (e) => { if (e.pointerId === dragPointer) dragPointer = null; };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+
+  // ------------------------------------------------------------------ networking
+  const net = new GameNetwork();
+  const me = { x: 2000, y: 2000, dir: 0, anim: 0, name: '', color: '#8f7bff' };
+  let myWizard = null;
+  const wizards = new Map(); // remote id -> wizard group
+
+  function addLog(text, cls) {
+    const log = $('log'), div = document.createElement('div');
+    div.textContent = text;
+    if (cls) div.className = cls;
+    log.appendChild(div);
+    while (log.children.length > 40) log.firstChild.remove();
+    log.scrollTop = log.scrollHeight;
+  }
+
+  net.on('ready', ({ self }) => {
+    Object.assign(me, self);
+    if (myWizard) { scene.remove(myWizard); disposeWizard(myWizard); }
+    myWizard = makeWizard(me.color, me.name, true);
+    scene.add(myWizard);
+    // Start facing the keystone
+    camYaw = Math.atan2(CENTER - me.x * SCALE, CENTER - me.y * SCALE);
+    myWizard.rotation.y = camYaw;
+    $('netDot').classList.add('on');
+    addLog(`You entered the realm as ${me.name}.`, 'sys');
+  });
+  net.on('player_joined', (p) => addLog(`${p.name} entered the realm.`, 'sys'));
+  net.on('player_left', (p) => {
+    addLog(`${p.name} left.`, 'sys');
+    const w = wizards.get(p.id);
+    if (w) { scene.remove(w); disposeWizard(w); wizards.delete(p.id); }
+  });
+  net.on('chat', (m) => {
+    addLog(`${m.name}: ${m.text}`);
+    const w = m.isSelf ? myWizard : wizards.get(m.id);
+    if (w) showBubble(w, m.text);
+  });
+  net.on('correction', ({ x, y }) => { me.x = x; me.y = y; });
+  net.on('disconnected', () => { $('netDot').classList.remove('on'); addLog('Connection lost. Reconnecting…', 'sys'); });
+
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { net.sendChat(chatInput.value); chatInput.value = ''; chatInput.blur(); }
+    if (e.key === 'Escape') chatInput.blur();
+  });
+
+  $('joinForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('joinBtn');
+    btn.disabled = true; btn.textContent = 'Opening the portal…';
+    $('joinError').textContent = '';
+    try {
+      await net.connect($('nameInput').value);
+      $('join').remove();
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Enter';
+      $('joinError').textContent = err.message === 'Server is full.' ? 'The realm is full right now. Try again soon.' : `Couldn't connect: ${err.message}`;
+    }
+  });
+
+  // ------------------------------------------------------------------ main loop
+  const clock = new THREE.Clock();
+  const camTarget = new THREE.Vector3(CENTER, 0, CENTER);
+
+  function frame() {
+    const dt = Math.min(clock.getDelta(), 0.1);
+    const t = clock.elapsedTime;
+
+    // Movement relative to the camera
+    let fwd = 0, side = 0;
+    if (keys.has('w') || keys.has('arrowup')) fwd += 1;
+    if (keys.has('s') || keys.has('arrowdown')) fwd -= 1;
+    if (keys.has('d') || keys.has('arrowright')) side += 1;
+    if (keys.has('a') || keys.has('arrowleft')) side -= 1;
+    if (keys.has('q')) camYaw += dt * 2;
+    if (keys.has('e')) camYaw -= dt * 2;
+    if (!fwd && !side) { fwd = -joy.y; side = joy.x; }
+
+    const mag = Math.min(Math.hypot(fwd, side), 1);
+    const fx = Math.sin(camYaw), fz = Math.cos(camYaw);       // camera forward on the ground
+    const rx = -Math.cos(camYaw), rz = Math.sin(camYaw);      // camera right on the ground
+    let mx = fx * fwd + rx * side, mz = fz * fwd + rz * side;
+    const mlen = Math.hypot(mx, mz);
+
+    if (net.world && mlen > 0.01) {
+      mx /= mlen; mz /= mlen;
+      const step = RUN_SPEED * mag * dt;
+      me.x = Math.max(0, Math.min(net.world.width, me.x + mx * step));
+      me.y = Math.max(0, Math.min(net.world.height, me.y + mz * step));
+      me.dir = (Math.atan2(mz, mx) * 180 / Math.PI + 360) % 360;
+      me.anim = 1;
+    } else {
+      me.anim = 0;
+    }
+    if (net.connected) net.sendUpdate(me.x, me.y, me.dir, me.anim);
+
+    // My wizard
+    if (myWizard) {
+      myWizard.position.set(me.x * SCALE, 0, me.y * SCALE);
+      myWizard.rotation.y = lerpAngle(myWizard.rotation.y, headingToRotY(me.dir), Math.min(dt * 12, 1));
+      animateWizard(myWizard, me.anim === 1, t, dt);
+    }
+
+    // Everyone else
+    if (net.selfId !== null) {
+      for (const p of net.getRemotePlayers()) {
+        let w = wizards.get(p.id);
+        if (!w) {
+          w = makeWizard(p.color, p.name, false);
+          w.position.set(p.x * SCALE, 0, p.y * SCALE);
+          w.rotation.y = headingToRotY(p.dir);
+          scene.add(w);
+          wizards.set(p.id, w);
+        }
+        w.position.set(p.x * SCALE, 0, p.y * SCALE);
+        w.rotation.y = lerpAngle(w.rotation.y, headingToRotY(p.dir), Math.min(dt * 10, 1));
+        animateWizard(w, p.anim === 1, t, dt);
+      }
+      // Remove anyone the network no longer knows about
+      for (const [id, w] of wizards) {
+        if (!net.players.has(id)) { scene.remove(w); disposeWizard(w); wizards.delete(id); }
+      }
+      $('count').textContent = `${net.players.size + 1} online`;
+    }
+
+    // Camera follows behind
+    const focus = myWizard ? myWizard.position : keystone.position;
+    camTarget.lerp(new THREE.Vector3(focus.x, 1.6, focus.z), Math.min(dt * 10, 1));
+    const dist = 9;
+    camera.position.set(
+      camTarget.x - Math.sin(camYaw) * Math.cos(camPitch) * dist,
+      camTarget.y + Math.sin(camPitch) * dist + 1,
+      camTarget.z - Math.cos(camYaw) * Math.cos(camPitch) * dist
+    );
+    camera.lookAt(camTarget.x, camTarget.y + 0.8, camTarget.z);
+
+    // Ambient magic
+    crystal.rotation.y += dt * 0.8;
+    crystal.position.y = 4 + Math.sin(t * 1.4) * 0.35;
+    crystalLight.intensity = 1.2 + Math.sin(t * 2) * 0.25;
+    stars.position.set(camera.position.x, 0, camera.position.z);
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
