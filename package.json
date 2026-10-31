@@ -1,0 +1,23 @@
+{
+  "name": "keystone-multiplayer-server",
+  "version": "1.0.0",
+  "description": "Single-room multiplayer server (Express + Socket.IO) with a throttled broadcast queue for 500+ concurrent players",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node loadtest.js --with-server --bots=60 --forever",
+    "demo:200": "node loadtest.js --with-server --bots=200 --max-players=200 --forever",
+    "loadtest": "node loadtest.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}
