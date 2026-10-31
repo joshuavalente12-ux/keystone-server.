@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Server Monitor</title>
+  <style>
+    :root {
+      --bg: #0d1014;
+      --panel: #151a21;
+      --panel-2: #1b222b;
+      --line: #252e39;
+      --text: #e6edf3;
+      --muted: #8b98a7;
+      --accent: #4cc2ff;
+      --good: #3ddc84;
+      --warn: #ffb020;
+      --bad: #ff5c5c;
+      --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    header {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 14px 20px; border-bottom: 1px solid var(--line);
+    }
+    header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+    .status { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+    .dot.on { background: var(--good); box-shadow: 0 0 0 4px rgba(61, 220, 132, .15); }
+    header .spacer { flex: 1; }
+    header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+
+    main {
+      display: grid; gap: 16px; padding: 16px 20px 24px;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr);
+      max-width: 1500px; margin: 0 auto;
+    }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } }
+
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+    .card h2 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; }
+    .card h2 span { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+    #mapWrap { position: relative; width: 100%; aspect-ratio: 1 / 1; }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 6px; background: #0a0d11; }
+
+    .side { display: grid; gap: 16px; align-content: start; min-width: 0; }
+    .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .tile { background: var(--panel-2); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+    .tile .label { color: var(--muted); font-size: 12px; }
+    .tile .value { font: 600 22px/1.2 var(--mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tile .value small { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 3px; }
+    .tile.hero { grid-column: 1 / -1; }
+    .tile.hero .value { font-size: 34px; }
+
+    .capacity { display: grid; gap: 8px; }
+    .capacity label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+    .capacity input { width: 90px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: 14px var(--mono); }
+    .bar { height: 10px; background: var(--panel-2); border-radius: 6px; overflow: hidden; }
+    .bar > div { height: 100%; width: 0; background: var(--good); transition: width .4s, background .4s; }
+    #capacityText { font-size: 13px; color: var(--muted); }
+
+    .chart { width: 100%; height: 110px; display: block; }
+    .charts { display: grid; gap: 14px; }
+    .chart-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    .chart-label b { color: var(--text); font: 600 13px var(--mono); }
+
+    .counters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; font-size: 13px; }
+    .counters div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px dashed var(--line); padding: 3px 0; }
+    .counters span { color: var(--muted); }
+    .counters b { font: 500 13px var(--mono); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Server Monitor</h1>
+    <span class="status"><span id="statusDot" class="dot"></span><span id="statusText">Connecting…</span></span>
+    <span class="spacer"></span>
+    <a href="/" target="_blank" rel="noopener">Open the game in a new tab ↗</a>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Live world <span id="mapInfo">—</span></h2>
+      <div id="mapWrap"><canvas id="map"></canvas></div>
+    </section>
+
+    <div class="side">
+      <section class="card">
+        <h2>Right now</h2>
+        <div class="tiles">
+          <div class="tile hero"><div class="label">Players online</div><div class="value" id="tPlayers">0</div></div>
+          <div class="tile"><div class="label">Server upload</div><div class="value" id="tUpload">0<small>Mbps</small></div></div>
+          <div class="tile"><div class="label">Each player downloads</div><div class="value" id="tPerClient">0<small>KB/s</small></div></div>
+          <div class="tile"><div class="label">Batch size</div><div class="value" id="tBatch">0<small>KB</small></div></div>
+          <div class="tile"><div class="label">Entries per batch</div><div class="value" id="tEntries">0</div></div>
+          <div class="tile"><div class="label">Server CPU (1 core)</div><div class="value" id="tCpu">0<small>%</small></div></div>
+          <div class="tile"><div class="label">Lag spikes (p99)</div><div class="value" id="tLag">0<small>ms</small></div></div>
+        </div>
+      </section>
+
+      <section class="card capacity">
+        <h2>Will my internet handle it?</h2>
+        <label>Your upload speed
+          <input id="uploadCap" type="number" min="1" step="1" placeholder="e.g. 40" /> Mbps
+        </label>
+        <div class="bar"><div id="capBar"></div></div>
+        <div id="capacityText">Enter your upload speed from a speed test to compare.</div>
+      </section>
+
+      <section class="card charts">
+        <h2>Last 60 seconds</h2>
+        <div>
+          <div class="chart-label"><span>Server upload (Mbps)</span><b id="cUpload">0</b></div>
+          <canvas class="chart" id="chartUpload"></canvas>
+        </div>
+        <div>
+          <div class="chart-label"><span>Server CPU (% of one core)</span><b id="cCpu">0</b></div>
+          <canvas class="chart" id="chartCpu"></canvas>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Details</h2>
+        <div class="counters">
+          <div><span>Tick rate</span><b id="dTick">—</b></div>
+          <div><span>Batches / sec</span><b id="dBps">—</b></div>
+          <div><span>Updates in / sec</span><b id="dUin">—</b></div>
+          <div><span>Flush time</span><b id="dFlush">—</b></div>
+          <div><span>Memory</span><b id="dMem">—</b></div>
+          <div><span>Peak players</span><b id="dPeak">—</b></div>
+          <div><span>Watchers</span><b id="dSpec">—</b></div>
+          <div><span>Uptime</span><b id="dUp">—</b></div>
+          <div><span>Blocked moves</span><b id="dRej">—</b></div>
+          <div><span>Rate-limited</span><b id="dRate">—</b></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/client.js"></script>
+  <script>
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const HISTORY = 60;
+    const history = { upload: [], cpu: [] };
+    let world = { width: 4000, height: 4000 };
+
+    // ------------------------------------------------------------------ live world
+    const net = new GameNetwork({ spectator: true });
+    net.on('ready', (info) => { world = info.world; setStatus(true); });
+    net.on('disconnected', () => setStatus(false));
+    net.on('reconnecting', () => setStatus(false, 'Reconnecting…'));
+    net.connect('monitor').catch((err) => setStatus(false, `Can't connect: ${err.message}`));
+
+    function setStatus(on, text) {
+      $('statusDot').classList.toggle('on', on);
+      $('statusText').textContent = text || (on ? 'Live' : 'Disconnected');
+    }
+
+    const map = $('map');
+    const mctx = map.getContext('2d');
+
+    function sizeCanvas(canvas) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      return dpr;
+    }
+
+    function drawMap() {
+      const dpr = sizeCanvas(map);
+      const W = map.width, H = map.height;
+      const sx = W / world.width, sy = H / world.height;
+
+      mctx.fillStyle = '#0a0d11';
+      mctx.fillRect(0, 0, W, H);
+
+      // grid every 500 world units
+      mctx.strokeStyle = '#18202a';
+      mctx.lineWidth = 1;
+      mctx.beginPath();
+      for (let x = 500; x < world.width; x += 500) { mctx.moveTo(Math.round(x * sx) + .5, 0); mctx.lineTo(Math.round(x * sx) + .5, H); }
+      for (let y = 500; y < world.height; y += 500) { mctx.moveTo(0, Math.round(y * sy) + .5); mctx.lineTo(W, Math.round(y * sy) + .5); }
+      mctx.stroke();
+
+      const players = net.selfId === null ? [] : net.getRemotePlayers();
+      const r = Math.max(2.5, 3.5 * dpr);
+      const showNames = players.length <= 40;
+      mctx.font = `${11 * dpr}px system-ui, sans-serif`;
+      mctx.textAlign = 'center';
+
+      for (const p of players) {
+        const px = p.x * sx, py = p.y * sy;
+        mctx.fillStyle = p.color;
+        mctx.beginPath(); mctx.arc(px, py, r, 0, Math.PI * 2); mctx.fill();
+        if (p.anim) {
+          const rad = p.dir * Math.PI / 180;
+          mctx.strokeStyle = p.color;
+          mctx.beginPath(); mctx.moveTo(px, py); mctx.lineTo(px + Math.cos(rad) * r * 2.4, py + Math.sin(rad) * r * 2.4); mctx.stroke();
+        }
+        if (showNames) {
+          mctx.fillStyle = '#8b98a7';
+          mctx.fillText(p.name, px, py - r - 4 * dpr);
+        }
+      }
+
+      $('mapInfo').textContent = `${players.length} on map · ${world.width}×${world.height}`;
+      requestAnimationFrame(drawMap);
+    }
+    requestAnimationFrame(drawMap);
+
+    // ------------------------------------------------------------------ stats
+    function fmt(n, digits = 1) { return Number(n || 0).toFixed(digits); }
+    function setVal(id, value, unit) {
+      const el = $(id);
+      el.textContent = value;
+      if (unit) { const s = document.createElement('small'); s.textContent = unit; el.appendChild(s); }
+    }
+    function uptime(sec) {
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+      return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
+    }
+
+    async function pollHealth() {
+      try {
+        const res = await fetch('/health', { cache: 'no-store' });
+        const h = await res.json();
+        const L = h.live;
+
+        setVal('tPlayers', h.players);
+        setVal('tUpload', fmt(L.uploadMbps), 'Mbps');
+        setVal('tPerClient', fmt(L.perClientKBps), 'KB/s');
+        setVal('tBatch', fmt(h.lastBatchBytes / 1024), 'KB');
+        setVal('tEntries', h.lastBatchEntries);
+        setVal('tCpu', fmt(L.cpuPercent), '%');
+        setVal('tLag', fmt(L.eventLoopLagP99Ms), 'ms');
+
+        $('dTick').textContent = `${h.tickMs} ms`;
+        $('dBps').textContent = fmt(L.batchesPerSec);
+        $('dUin').textContent = L.updatesInPerSec;
+        $('dFlush').textContent = `${fmt(h.lastFlushMs, 2)} ms`;
+        $('dMem').textContent = `${h.memoryMB} MB`;
+        $('dPeak').textContent = h.peakPlayers;
+        $('dSpec').textContent = h.spectators;
+        $('dUp').textContent = uptime(h.uptimeSec);
+        $('dRej').textContent = h.rejectedMoves;
+        $('dRate').textContent = h.rateLimitedUpdates;
+
+        push(history.upload, L.uploadMbps);
+        push(history.cpu, L.cpuPercent);
+        $('cUpload').textContent = `${fmt(L.uploadMbps)} Mbps`;
+        $('cCpu').textContent = `${fmt(L.cpuPercent)}%`;
+        drawChart($('chartUpload'), history.upload, '#4cc2ff', capacity());
+        drawChart($('chartCpu'), history.cpu, '#b48cff', 100);
+        updateCapacity(L.uploadMbps);
+      } catch {
+        setStatus(false, 'Server not responding');
+      }
+    }
+    setInterval(pollHealth, 1000);
+    pollHealth();
+
+    function push(arr, v) { arr.push(Number(v) || 0); if (arr.length > HISTORY) arr.shift(); }
+
+    function drawChart(canvas, data, color, refLine) {
+      const dpr = sizeCanvas(canvas);
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height, pad = 4 * dpr;
+      ctx.clearRect(0, 0, W, H);
+
+      const maxData = Math.max(1, ...data);
+      const max = Math.max(maxData, refLine || 0) * 1.15;
+      const x = (i) => pad + (i / (HISTORY - 1)) * (W - pad * 2);
+      const y = (v) => H - pad - (v / max) * (H - pad * 2);
+
+      // baseline + reference line (your upload limit, or 100% CPU)
+      ctx.strokeStyle = '#252e39'; ctx.lineWidth = dpr;
+      ctx.beginPath(); ctx.moveTo(pad, H - pad); ctx.lineTo(W - pad, H - pad); ctx.stroke();
+      if (refLine) {
+        ctx.setLineDash([4 * dpr, 4 * dpr]);
+        ctx.strokeStyle = '#ff5c5c';
+        ctx.beginPath(); ctx.moveTo(pad, y(refLine)); ctx.lineTo(W - pad, y(refLine)); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (data.length < 2) return;
+
+      const offset = HISTORY - data.length;
+      ctx.beginPath();
+      data.forEach((v, i) => { const px = x(i + offset), py = y(v); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+      ctx.strokeStyle = color; ctx.lineWidth = 2 * dpr; ctx.stroke();
+      ctx.lineTo(x(HISTORY - 1), H - pad); ctx.lineTo(x(offset), H - pad); ctx.closePath();
+      ctx.fillStyle = color + '22'; ctx.fill();
+    }
+
+    // ------------------------------------------------------------------ capacity
+    const capInput = $('uploadCap');
+    try { capInput.value = localStorage.getItem('uploadCapMbps') || ''; } catch {}
+    capInput.addEventListener('input', () => {
+      try { localStorage.setItem('uploadCapMbps', capInput.value); } catch {}
+    });
+    function capacity() { const v = Number(capInput.value); return v > 0 ? v : 0; }
+
+    function updateCapacity(mbps) {
+      const cap = capacity();
+      const bar = $('capBar');
+      if (!cap) {
+        bar.style.width = '0';
+        $('capacityText').textContent = 'Enter your upload speed from a speed test to compare.';
+        return;
+      }
+      const pct = (mbps / cap) * 100;
+      bar.style.width = `${Math.min(pct, 100)}%`;
+      let color = 'var(--good)', verdict = 'Comfortable.';
+      if (pct >= 100) { color = 'var(--bad)'; verdict = 'Over your limit — players will lag.'; }
+      else if (pct >= 70) { color = 'var(--warn)'; verdict = 'Tight — spikes may cause lag.'; }
+      bar.style.background = color;
+      $('capacityText').textContent = `Using ${fmt(pct, 0)}% of your ${cap} Mbps upload. ${verdict}`;
+    }
+  </script>
+</body>
+</html>
